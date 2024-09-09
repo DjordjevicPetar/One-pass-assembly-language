@@ -1,0 +1,355 @@
+%{
+  #include <stdio.h>
+  #include <iostream>
+  #include <list>
+  #include <string>
+  #include "../inc/Rel/SymbolTable.hpp"
+  #include "../inc/Rel/LiteralPool.hpp"
+  #include "../inc/Rel/BackPatching.hpp"
+  #include "../inc/Rel/TNS.hpp"
+  #include "../inc/Instructions/AL_Ins.hpp"
+  #include "../inc/Instructions/Misc_Ins.hpp"
+  #include "../inc/Instructions/Branch_Ins.hpp"
+  #include "../inc/Instructions/Misc_Ins.hpp"
+  #include "../inc/Instructions/Stack_Ins.hpp"
+  #include "../inc/Instructions/CSR_Ins.hpp"
+  #include "../inc/Instructions/Memory_Ins.hpp"
+  #include "../inc/Asembler.hpp"
+  void yyerror(const char *s);
+  extern int yylex();
+  extern int yyparse();
+  extern FILE* yyin;
+
+%}
+
+%union {
+  int num;
+  char* str;
+  void* symbolList;
+  void* instruction;
+}
+
+//Complex Types
+%type PROGRAM
+%type<num> CSR
+%type<symbolList> SYMBOL_LIST
+%type<symbolList> SYMBOL_LITERAL_LIST
+%type<instruction> INSTRUCTION
+
+
+//Types
+%token<num> NUMBER
+%token<str> STRING
+
+//Registers
+%token<num> REGISTER
+%token STATUS
+%token HANDLER
+%token CAUSE
+
+//Directives
+%token<str> LABEL
+%token END_DIR
+%token GLOBAL_DIR
+%token EXTERN_DIR
+%token SECTION_DIR
+%token WORD_DIR
+%token SKIP_DIR
+%token ASCII_DIR
+%token EQU_DIR
+
+//Instructions
+%token HALT
+%token INT
+%token IRET
+%token CALL
+%token RET
+%token JMP
+%token BEQ
+%token BNE
+%token BGT
+%token PUSH
+%token POP
+%token XCHG
+%token ADD
+%token SUB
+%token MUL
+%token DIV
+%token NOT
+%token AND
+%token OR
+%token XOR
+%token SHL
+%token SHR
+%token LD
+%token ST
+%token CSRRD
+%token CSRWR
+
+//Variable names
+%token<str> SYMBOL
+
+//One character symbols
+%token DOLLAR
+%token PERCENT
+%token LEFT_BRACE
+%token RIGHT_BRACE
+%token PLUS
+%token MINUS
+%token COLON
+%token EOL
+
+%%
+
+PROGRAM:
+  LINE {;}|
+  PROGRAM LINE {;};
+
+CSR:
+  STATUS {$$ = 0;} |
+  HANDLER {$$ = 1;} |
+  CAUSE {$$ = 2;};
+
+SYMBOL_LIST:
+  SYMBOL {
+    std::list<std::string>* lista = new std::list<std::string>();
+    lista->push_back($1);
+    $$ = lista;
+    } |
+  SYMBOL_LIST COLON SYMBOL {
+    std::list<std::string>* lista = (std::list<std::string>*)$1;
+    lista->push_back($3);
+    };
+
+SYMBOL_LITERAL_LIST:
+  SYMBOL {
+    std::list<std::pair<std::string, int>>* lista = new std::list<std::pair<std::string, int>>();
+    lista->push_back(std::make_pair($1, 0));
+    $$ = lista;
+    } |
+  NUMBER {
+    std::list<std::pair<std::string, int>>* lista = new std::list<std::pair<std::string, int>>();
+    lista->push_back(std::make_pair("", $1));
+    $$ = lista;
+    } |
+  SYMBOL_LIST COLON SYMBOL {
+    std::list<std::pair<std::string, int>>* lista = (std::list<std::pair<std::string, int>>*)$1;
+    lista->push_back(std::make_pair($3, 0));
+    } |
+  SYMBOL_LIST COLON NUMBER {
+    std::list<std::pair<std::string, int>>* lista = (std::list<std::pair<std::string, int>>*)$1;
+    lista->push_back(std::make_pair("", $3));
+    };
+
+INSTRUCTION:
+  HALT {
+    $$ = new Misc_Ins(HALT_CODE);
+  } |
+  INT {
+    $$ = new Misc_Ins(INT_CODE);
+  } |
+  IRET {
+    $$ = new Misc_Ins(IRET_CODE);
+  } |
+  CALL NUMBER {
+    $$ = new Branch_Ins(CALL_CODE, 15, 0, 0, "", $2);
+  } |
+  CALL SYMBOL {
+    $$ = new Branch_Ins(CALL_CODE, 15, 0, 0, $2, 0);
+  } |
+  RET {
+    $$ = new Misc_Ins(RET_CODE);
+  } |
+  JMP NUMBER {
+    $$ = new Branch_Ins(JMP_CODE, 15, 0, 0, "", $2);
+  } |
+  JMP SYMBOL {
+    $$ = new Branch_Ins(JMP_CODE, 15, 0, 0, $2, 0);
+  } |
+  BEQ REGISTER COLON REGISTER COLON NUMBER {
+    $$ = new Branch_Ins(BEQ_CODE, 15, $2, $4, "", $6);
+  } |
+  BEQ REGISTER COLON REGISTER COLON SYMBOL {
+    $$ = new Branch_Ins(BEQ_CODE, 15, $2, $4, $6, 0);
+  } |
+  BNE REGISTER COLON REGISTER COLON NUMBER {
+    $$ = new Branch_Ins(BNE_CODE, 15, $2, $4, "", $6);
+  } |
+  BNE REGISTER COLON REGISTER COLON SYMBOL {
+    $$ = new Branch_Ins(BNE_CODE, 15, $2, $4, $6, 0);
+  } |
+  BGT REGISTER COLON REGISTER COLON NUMBER {
+    $$ = new Branch_Ins(BGT_CODE, 15, $2, $4, "", $6);
+  } |
+  BGT REGISTER COLON REGISTER COLON SYMBOL {
+    $$ = new Branch_Ins(BGT_CODE, 15, $2, $4, $6, 0);
+  } |
+  PUSH REGISTER {
+    $$ = new Stack_Ins(PUSH_CODE, $2);
+  } |
+  POP REGISTER {
+    $$ = new Stack_Ins(POP_CODE, $2);
+  } |
+  XCHG REGISTER COLON REGISTER {
+    $$ = new AL_Ins(XCHG_CODE, 0, $2, $4);
+  } |
+  ADD REGISTER COLON REGISTER {
+    $$ = new AL_Ins(ADD_CODE, $4, $4, $2);
+  } |
+  SUB REGISTER COLON REGISTER {
+    $$ = new AL_Ins(SUB_CODE, $4, $4, $2);
+  } |
+  MUL REGISTER COLON REGISTER {
+    $$ = new AL_Ins(MUL_CODE, $4, $4, $2);
+  } |
+  DIV REGISTER COLON REGISTER {
+    $$ = new AL_Ins(DIV_CODE, $4, $4, $2);
+  } |
+  NOT REGISTER {
+    $$ = new AL_Ins(NOT_CODE, $2, $2, 0);
+  } |
+  AND REGISTER COLON REGISTER {
+    $$ = new AL_Ins(AND_CODE, $4, $4, $2);
+  } |
+  OR REGISTER COLON REGISTER {
+    $$ = new AL_Ins(OR_CODE, $4, $4, $2);
+  } |
+  XOR REGISTER COLON REGISTER {
+    $$ = new AL_Ins(XOR_CODE, $4, $4, $2);
+  } |
+  SHL REGISTER COLON REGISTER {
+    $$ = new AL_Ins(SHL_CODE, $4, $4, $2);
+  } |
+  SHR REGISTER COLON REGISTER {
+    $$ = new AL_Ins(SHR_CODE, $4, $4, $2);
+  } |
+  LD DOLLAR NUMBER COLON REGISTER {
+    $$ = new Memory_Ins(LD_Imm, $5, $3, "", 0);
+  } |
+  LD DOLLAR SYMBOL COLON REGISTER {
+    $$ = new Memory_Ins(LD_Dir, $5, 0, $3, 0);
+  } |
+  LD NUMBER COLON REGISTER {
+    $$ = new Memory_Ins(LD_IndImm, $4, $2, "", 0);
+  } |
+  LD SYMBOL COLON REGISTER {
+    $$ = new Memory_Ins(LD_IndDir, $4, 0, $2, 0);
+  } |
+  LD REGISTER COLON REGISTER {
+    $$ = new Memory_Ins(LD_IndImm, $4, 0, "", $2);
+  } |
+  LD LEFT_BRACE REGISTER RIGHT_BRACE COLON REGISTER {
+    $$ = new Memory_Ins(LD_IndReg, $6, 0, "", $3);
+  } |
+  LD LEFT_BRACE REGISTER PLUS NUMBER RIGHT_BRACE COLON REGISTER {
+    $$ = new Memory_Ins(LD_RegImm, $8, $5, "", $3);
+  } |
+  LD LEFT_BRACE REGISTER PLUS SYMBOL RIGHT_BRACE COLON REGISTER {
+    $$ = new Memory_Ins(LD_RegImm, $8, 0, $5, $3);
+  } |
+  ST REGISTER COLON DOLLAR SYMBOL {
+    $$ = new Memory_Ins(ST_Dir, $2, 0, $5, 0);
+  } |
+  ST REGISTER COLON NUMBER {
+    $$ = new Memory_Ins(ST_IndImm, $2, $4, "", 0);
+  } |
+  ST REGISTER COLON SYMBOL {
+    $$ = new Memory_Ins(ST_IndDir, $2, 0, $4, 0);
+  } |
+  ST REGISTER COLON REGISTER {
+    $$ = new Memory_Ins(ST_Reg, $2, 0, "", $4);
+  } |
+  ST REGISTER COLON LEFT_BRACE REGISTER RIGHT_BRACE {
+    $$ = new Memory_Ins(ST_IndReg, $2, 0, "", $5);
+  } |
+  ST REGISTER COLON LEFT_BRACE REGISTER PLUS SYMBOL RIGHT_BRACE {
+    $$ = new Memory_Ins(ST_RegSym, $2, 0, $7, $5);
+  } |
+  ST REGISTER COLON LEFT_BRACE REGISTER PLUS NUMBER RIGHT_BRACE {
+    $$ = new Memory_Ins(ST_RegImm, $2, $7, "", $5);
+  } |
+  CSRRD CSR COLON REGISTER {
+    $$ = new CSR_Ins(CSRRD_CODE, $4, $2);
+  } |
+  CSRWR REGISTER COLON CSR {
+    $$ = new CSR_Ins(CSRWR_CODE, $4, $2);
+  };
+
+DIRECTIVE:
+  GLOBAL_DIR SYMBOL_LIST {
+    std::list<std::string>* lista = (std::list<std::string>*)$2;
+    for(auto s: *lista){
+      SymbolTable::getInstance()->DeclareSymbol(true, s);
+    }
+  } |
+  EXTERN_DIR SYMBOL_LIST {
+    std::list<std::string>* lista = (std::list<std::string>*)$2;
+    for(auto s: *lista){
+      SymbolTable::getInstance()->DeclareSymbol(true, s);
+    }
+  } |
+  SECTION_DIR SYMBOL {
+    LiteralPool::getInstance()->EmptyPool(Asembler::getInstance()->getOutBin());
+    SymbolTable::getInstance()->EndSection(Asembler::getInstance()->getOutBin().tellp());
+    SymbolTable::getInstance()->DeclareSection($2, Asembler::getInstance()->getOutBin().tellp());
+  } |
+  WORD_DIR SYMBOL_LITERAL_LIST {
+    std::list<std::pair<std::string, int>>* lista = (std::list<std::pair<std::string, int>>*)$2;
+    for(auto s: *lista){
+      if(s.first != ""){
+        BackPatching::getInstance()->AddAssemblyRelocation(Asembler::getInstance()->getOutBin().tellp(), s.first);
+      }
+      Asembler::getInstance()->getOutBin().write(reinterpret_cast<char*>(&s.second), sizeof(s.second));
+    }
+  } |
+  SKIP_DIR NUMBER {
+    for(int i = 0; i < $2; i++)Asembler::getInstance()->getOutBin() << (unsigned char)0;
+  } |
+  ASCII_DIR STRING {
+    int i = 0;
+    while($2[i] != '\0')Asembler::getInstance()->getOutBin() << $2[i++];
+  } |
+  EQU_DIR SYMBOL COLON NUMBER {
+    SymbolTable::getInstance()->DeclareSymbol(false, $2);
+    SymbolTable::getInstance()->DefineSymbol($2, $4, true);
+  } |
+  EQU_DIR SYMBOL COLON SYMBOL MINUS SYMBOL {
+    SymbolTable::getInstance()->DeclareSymbol(false, $2);
+    TNS::getInstance()->AddEntry($2, $4, $6, SymbolTable::getInstance()->getLastSection());
+  } |
+  EQU_DIR SYMBOL COLON NUMBER PLUS NUMBER {
+    SymbolTable::getInstance()->DeclareSymbol(false, $2);
+    SymbolTable::getInstance()->DefineSymbol($2, $4 + $6, true);
+  } |
+  EQU_DIR SYMBOL COLON NUMBER MINUS NUMBER {
+    SymbolTable::getInstance()->DeclareSymbol(false, $2);
+    SymbolTable::getInstance()->DefineSymbol($2, $4 - $6, true);
+  } |
+  END_DIR {
+    TNS::getInstance()->Resolve(Asembler::getInstance()->getOutBin());
+    LiteralPool::getInstance()->EmptyPool(Asembler::getInstance()->getOutBin());
+    SymbolTable::getInstance()->EndSection(Asembler::getInstance()->getOutBin().tellp());
+    BackPatching::getInstance()->fixLocalSymbols(Asembler::getInstance()->getOutBin());
+  };
+
+LINE:
+  INSTRUCTION EOL {
+    ((Instruction*)$1)->Visit();
+    } |
+  LABEL EOL {
+    SymbolTable::getInstance()->DeclareSymbol(false, $1);
+    SymbolTable::getInstance()->DefineSymbol($1, Asembler::getInstance()->getOutBin().tellp());
+  } |
+  LABEL INSTRUCTION EOL {
+    SymbolTable::getInstance()->DeclareSymbol(false, $1);
+    SymbolTable::getInstance()->DefineSymbol($1, Asembler::getInstance()->getOutBin().tellp());
+    ((Instruction*)$2)->Visit();
+  } |
+  DIRECTIVE EOL {;} |
+  EOL {;};
+
+%%
+
+void yyerror(const char* s){
+  printf("ERROR: %s\n", s);
+}
